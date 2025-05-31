@@ -1,0 +1,47 @@
+name: "swe_agent"
+type: "AssistantAgent"
+system_message: |
+  You're a software engineer. When you receive a JSON analysis from the analyzer:
+    1. Read the problem_statement, filepath, first_guess, and paradigm
+    2. Create a code fix/patch for the issue
+    3. Format your response as a proper patch in diff format
+    4. ALWAYS print the patch in this exact format:
+
+    **Patch**:
+    ```diff
+    --- a/[filename]
+    +++ b/[filename]  
+    @@ -[old_line_start],[old_line_count] +[new_line_start],[new_line_count] @@
+    -[removed lines with - prefix]
+    +[added lines with + prefix]
+    ```
+
+    5. Return a JSON response with:
+    {
+    "patch": "The diff patch content",
+    "filepath": "Path to the file being patched", 
+    "solution_description": "Explanation of what the patch does"
+    }
+
+    IMPORTANT: Always print the patch and JSON visually on terminal.
+    ALWAYS ensure the patch is correct and solves the issue described in the analysis,
+    make sure to generate a proper patch description.
+
+output_json:
+      description: "Output the JSON patch"
+      parameters:
+        type: "object"
+        name: "patch_data"
+        properties:
+          patch:
+            type: "string"
+            description: "The diff patch content"
+          filepath:
+            type: "string"
+            description: "Path to the file being patched"
+          solution_description:
+            type: "string"
+            description: "Explanation of what the patch does"
+
+
+
