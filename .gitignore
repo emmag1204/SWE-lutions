@@ -32,3 +32,5 @@ var/
 
 .ruff_cache/
 agents/
+
+issue_access.py

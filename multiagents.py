@@ -1,20 +1,19 @@
 import asyncio
 import os
+from dotenv import load_dotenv
 import requests
 import base64
 from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent
 
+issue_url = "https://api.github.com/repos/SWE-agent/test-repo/issues/1"
 
-def get_github_issue(repo_owner: str, repo_name: str, issue_number: int, token: str = "") -> str:
-    """Fetch GitHub issue details using GitHub API"""
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/issues/{issue_number}"
-    headers = {"Authorization": f"token {token}"} if token else {}
-    
+def get_github_issue(issue_url: str) -> str:
+    """Fetch GitHub issue details using the full API URL"""
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(issue_url)
         response.raise_for_status()
         issue_data = response.json()
-        
+
         return f"""
         Title: {issue_data['title']}
         State: {issue_data['state']}
@@ -24,37 +23,34 @@ def get_github_issue(repo_owner: str, repo_name: str, issue_number: int, token: 
     except Exception as e:
         return f"Error fetching issue: {str(e)}"
 
-def get_repository_structure(repo_owner: str, repo_name: str, path: str = "", token: str = "") -> str:
+def get_repository_structure(repo_owner: str, repo_name: str, path: str = "") -> str:
     """Fetch repository file structure"""
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{path}"
-    headers = {"Authorization": f"token {token}"} if token else {}
-    
+
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url)
         response.raise_for_status()
         contents = response.json()
-        
+
         structure = []
         for item in contents:
             if item['type'] == 'file':
                 structure.append(f"FILE: {item['path']}")
             elif item['type'] == 'dir':
                 structure.append(f"DIR: {item['path']}/")
-        
         return "\n".join(structure)
     except Exception as e:
         return f"Error fetching repository structure: {str(e)}"
 
-def get_file_content(repo_owner: str, repo_name: str, file_path: str, token: str = "") -> str:
+def get_file_content(repo_owner: str, repo_name: str, file_path: str) -> str:
     """Fetch specific file content from repository"""
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-    headers = {"Authorization": f"token {token}"} if token else {}
-    
+
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url)
         response.raise_for_status()
         file_data = response.json()
-        
+
         if file_data.get('encoding') == 'base64':
             content = base64.b64decode(file_data['content']).decode('utf-8')
             return f"Content of {file_path}:\n{content}"
@@ -63,28 +59,9 @@ def get_file_content(repo_owner: str, repo_name: str, file_path: str, token: str
     except Exception as e:
         return f"Error fetching file {file_path}: {str(e)}"
 
-# def search_python_files(repo_owner: str, repo_name: str, token: str = "") -> str:
-#     try:
-#         structure = get_repository_structure(repo_owner, repo_name, "", token)
-        
-#         python_files = []
-#         for line in structure.split('\n'):
-#             if line.startswith('FILE:') and line.endswith('.py'):
-#                 file_path = line.replace('FILE: ', '')
-#                 python_files.append(file_path)
-        
-#         file_contents = []
-#         for file_path in python_files[:5]: 
-#             content = get_file_content(repo_owner, repo_name, file_path, token)
-#             file_contents.append(content)
-        
-#         return f"Python files found:\n{chr(10).join(python_files)}\n\n" + "\n\n".join(file_contents)
-#     except Exception as e:
-#         return f"Error searching Python files: {str(e)}"
-
 async def main():
-    # Missing temperature and top_p settings
-    config = { 
+    load_dotenv()
+    config = {
         "api_type": "azure",
         "api_key": os.getenv("AGENTS_API_KEY"),
         "base_url": os.getenv("AGENTS_API_BASE_URL"),
@@ -92,18 +69,16 @@ async def main():
         "model": os.getenv("AGENTS_MODEL_NAME", "gpt-4o")
     }
 
-    
     analyzer = AssistantAgent(
-        name="analyzer", 
-        llm_config={"config_list": [config]}, 
+        name="analyzer",
+        llm_config={"config_list": [config]},
         system_message="""You are a GitHub issue analyzer. Your job is to:
 
             1. Fetch GitHub issue details using get_github_issue function
             2. Get repository structure using get_repository_structure function  
-            3. Search for Python files using search_python_files function
-            4. Get specific file content using get_file_content function
-            5. Analyze the issue and identify the problematic file path
-            6. Create a JSON analysis with ALL required fields filled
+            3. Get specific file content using get_file_content function
+            4. Analyze the issue and identify the problematic file path
+            5. Create a JSON analysis with ALL required fields filled
 
             IMPORTANT RULES:
             - ALWAYS say "This might be the filepath of the issue: [filepath]" when you identify a potential problematic file
@@ -122,19 +97,17 @@ async def main():
             - PLEASE make sure to always provide all the information needed for the SWE-agent to create a patch don't 
             stop iterating until you have all the information for the SWE-Agent, always print the JSON on the terminal and pass info to SWE-Agent"""
     )
-    
+
     analyzer.register_for_execution(name="get_github_issue")(get_github_issue)
-    analyzer.register_for_llm(description="Fetch GitHub issue details by repo owner, repo name, and issue number")(get_github_issue)
+    analyzer.register_for_llm(description="Fetch GitHub issue details using the full issue API URL")(get_github_issue)
     analyzer.register_for_execution(name="get_repository_structure")(get_repository_structure)
     analyzer.register_for_llm(description="Get repository file and folder structure")(get_repository_structure)
     analyzer.register_for_execution(name="get_file_content")(get_file_content)
     analyzer.register_for_llm(description="Get content of a specific file from repository")(get_file_content)
-    # analyzer.register_for_execution(name="search_python_files")(search_python_files)
-    # analyzer.register_for_llm(description="Search for and get content of Python files in repository")(search_python_files)
-    
+
     swe_agent = AssistantAgent(
-        name="swe_agent", 
-        llm_config={"config_list": [config]}, 
+        name="swe_agent",
+        llm_config={"config_list": [config]},
         system_message="""You're a software engineer. When you receive a JSON analysis from the analyzer:
 
                 1. Read the problem_statement, filepath, first_guess, and paradigm
@@ -160,28 +133,32 @@ async def main():
 
                 IMPORTANT: Always print the patch and JSON visually on terminal"""
     )
-    
+
     reviser = AssistantAgent(
         name="reviser",
-        llm_config={"config_list": [config]}, 
-        system_message="You review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved, otherwise provide go back to" \
-        "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'" \
+        llm_config={"config_list": [config]},
+        system_message="You review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved, otherwise go back to "
+        "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'"
     )
+
     user = UserProxyAgent(
-        name="user", 
-        code_execution_config=False, 
-        human_input_mode="NEVER", 
+        name="user",
+        code_execution_config=False,
+        human_input_mode="NEVER",
         is_termination_msg=lambda x: "LGTM" in x.get("content", "") or "👍" in x.get("content", "")
     )
+
     groupchat = GroupChat(
-        agents=[user, analyzer, swe_agent, reviser], 
+        agents=[user, analyzer, swe_agent, reviser],
         messages=[],
         max_round=20
     )
+
     manager = GroupChatManager(groupchat=groupchat, llm_config={"config_list": [config]})
+
     user.initiate_chat(
-        manager, 
-        message="Analyzer, please fetch and analyze GitHub issue #1 from SWE-Agent/test-repo repository. Get the repository structure, find relevant files, and provide a complete JSON analysis."
+        manager,
+        message=f"Analyzer, please fetch and analyze the issue from {issue_url}"
     )
 
 if __name__ == "__main__":
