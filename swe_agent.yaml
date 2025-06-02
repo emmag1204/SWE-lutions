@@ -21,6 +21,8 @@ system_message: |
     "patch": "The diff patch content",
     "filepath": "Path to the file being patched", 
     "solution_description": "Explanation of what the patch does"
+    "problem_statement": "The problem statement from the analyzer"
+
     }
 
     IMPORTANT: Always print the patch and JSON visually on terminal.
