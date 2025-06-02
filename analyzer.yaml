@@ -24,6 +24,7 @@ system_message: |
     - If you need more information, fetch more files or ask for clarification
     - PLEASE make sure to always provide all the information needed for the SWE agent to create a patch don't 
     stop iterating until you have all the information for the SWE agent
+    - Ask for the github issue url to analyze it and never ask for user input again after the first request
 
 functions:
   get_github_issue:

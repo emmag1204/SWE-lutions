@@ -5,7 +5,19 @@ import requests
 import base64
 from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent
 
-issue_url = "https://api.github.com/repos/SWE-agent/test-repo/issues/1"
+#issue_url = "https://github.com/SWE-agent/test-repo/issues/1"
+def convert_web_url_to_api(url: str) -> str:
+    """Convert GitHub web URL to GitHub API issue URL"""
+    try:
+        if "github.com" in url and "/issues/" in url:
+            parts = url.split("github.com/")[1].split("/issues/")
+            repo_path = parts[0]
+            issue_number = parts[1]
+            return f"https://api.github.com/repos/{repo_path}/issues/{issue_number}"
+        else:
+            raise ValueError("URL format not recognized")
+    except Exception as e:
+        return f"Error converting URL: {str(e)}"
 
 def get_github_issue(issue_url: str) -> str:
     """Fetch GitHub issue details using the full API URL"""
@@ -61,6 +73,9 @@ def get_file_content(repo_owner: str, repo_name: str, file_path: str) -> str:
 
 async def main():
     load_dotenv()
+    user_input_url = input("Enter GitHub issue url: ").strip()
+    issue_url = convert_web_url_to_api(user_input_url)
+
     config = {
         "api_type": "azure",
         "api_key": os.getenv("AGENTS_API_KEY"),
@@ -71,7 +86,7 @@ async def main():
 
     analyzer = AssistantAgent(
         name="analyzer",
-        llm_config={"config_list": [config]},
+        llm_config={"config_list": [config], "temperature": 0.1},
         system_message="""You are a GitHub issue analyzer. Your job is to:
 
             1. Fetch GitHub issue details using get_github_issue function
@@ -95,7 +110,8 @@ async def main():
             - NEVER pass incomplete JSON to SWE-Agent - iterate until all fields are filled
             - If you need more information, fetch more files or ask for clarification
             - PLEASE make sure to always provide all the information needed for the SWE-agent to create a patch don't 
-            stop iterating until you have all the information for the SWE-Agent, always print the JSON on the terminal and pass info to SWE-Agent"""
+            stop iterating until you have all the information for the SWE-Agent, always print the JSON on the terminal and pass info to SWE-Agent
+            - Ask for the github issue url to analyze it and never ask for user input again after the first request"""
     )
 
     analyzer.register_for_execution(name="get_github_issue")(get_github_issue)
@@ -107,7 +123,7 @@ async def main():
 
     swe_agent = AssistantAgent(
         name="swe_agent",
-        llm_config={"config_list": [config]},
+        llm_config={"config_list": [config], "temperature": 0.1},
         system_message="""You're a software engineer. When you receive a JSON analysis from the analyzer:
 
                 1. Read the problem_statement, filepath, first_guess, and paradigm
@@ -136,15 +152,17 @@ async def main():
 
     reviser = AssistantAgent(
         name="reviser",
-        llm_config={"config_list": [config]},
+        llm_config={"config_list": [config], "temperature": 0.7},
         system_message="You review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved, otherwise go back to "
-        "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'"
+        "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'" \
+        "Don't ask for human input after approving the patch, just end the iteration."
     )
 
     user = UserProxyAgent(
         name="user",
         code_execution_config=False,
         human_input_mode="NEVER",
+        
         is_termination_msg=lambda x: "LGTM" in x.get("content", "") or "👍" in x.get("content", "")
     )
 
