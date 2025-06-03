@@ -68,17 +68,6 @@ def get_file_content(repo_owner: str, repo_name: str, file_path: str) -> str:
     except Exception as e:
         return f"Error fetching file {file_path}: {str(e)}"
 
-def load_json_file(filename):
-    try:
-        with open(filename, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"{filename} not found")
-        return None
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON in {filename}")
-        return None
-
 class AnalyzerDataStore:
     def __init__(self):
         self.json_data = None
@@ -101,7 +90,6 @@ class AnalyzerDataStore:
         return self.json_data is not None
 
 analyzer_store = AnalyzerDataStore()
-
 class CustomGroupChatManager(GroupChatManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -128,7 +116,6 @@ class CustomGroupChatManager(GroupChatManager):
                         self.analyzer_json = analyzer_json
                         with open("analyzer_output.json", "w") as f:
                             json.dump(analyzer_json, f, indent=2)
-                        print("Saved analyzer JSON to analyzer_output.json")
                     except Exception as e:
                         print(f"Error parsing analyzer JSON: {e}")
 
@@ -139,8 +126,6 @@ class CustomGroupChatManager(GroupChatManager):
                         swe_json = json.loads(match.group())
                         with open("swe_agent_output.json", "w") as f:
                             json.dump(swe_json, f, indent=2)
-                        print("Saved SWE output JSON with problem_statement to swe_agent_output.json")
-
                         reviser_agent = None
                         for agent in self.groupchat.agents:
                             if agent.name == "reviser":
@@ -161,12 +146,10 @@ class CustomGroupChatManager(GroupChatManager):
                         print(f"Error parsing SWE JSON: {e}")
         return result
 
-    async def load_analyzer_data_from_disk(self):
-        self.analyzer_json = load_json_file("analyzer_output.json")
+    def get_analyzer_data(self):
         return self.analyzer_json
 
-    async def load_swe_data_from_disk(self):
-        self.swe_json = load_json_file("swe_agent_output.json")
+    def get_swe_data(self):
         return self.swe_json
 
 async def main():
@@ -228,13 +211,14 @@ async def main():
             4. ALWAYS print the patch in this exact format:
 
             **Patch**:
-            ```diff
+            
+            diff
             --- a/[filename]
             +++ b/[filename]  
             @@ -[old_line_start],[old_line_count] +[new_line_start],[new_line_count] @@
             -[removed lines with - prefix]
             +[added lines with + prefix]
-            ```
+
 
             5. Return a JSON response with:
             {
@@ -244,61 +228,35 @@ async def main():
                 "problem_statement": "The problem statement from the analyzer"
             }
 
-           NEVER forget to include the problem_statement from the analyzer in your JSON output."""
+           """
     )
 
     reviser = AssistantAgent(
         name="reviser",
-        llm_config={"config_list": [config], "temperature": 0.1},
-        system_message="""You are a code reviser. Your job is to:
-            Review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved
-            otherwise provide feedback and go back to SWE-Agent to create a new proper patch that will fix the error 
-            and check again if the patch is correct. Answer with 'LGTM 👍' if the patch is correct and solves the problem."""
+        llm_config={"config_list": [config], "temperature": 0.7},
+        system_message="You review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved, otherwise go back to "
+                       "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'"
+                       "Don't ask for human input after approving the patch, just end the iteration."
     )
-    user = UserProxyAgent(name="user", code_execution_config=False, human_input_mode="NEVER")
+
+    user = UserProxyAgent(
+        name="user",
+        code_execution_config=False,
+        human_input_mode="NEVER",
+        is_termination_msg=lambda x: "LGTM" in x.get("content", "") or "👍" in x.get("content", "")
+    )
 
     groupchat = GroupChat(
         agents=[user, analyzer, swe_agent, reviser],
-        messages=[]
+        messages=[],
+        max_round=20
     )
 
     manager = CustomGroupChatManager(groupchat=groupchat, llm_config={"config_list": [config], "temperature": 0.5})
-
-    groupchat.manager = manager
-
-    user.initiate_chat(recipient=manager)
-
-    def load_json_file(filename):
-        try:
-            with open(filename, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading {filename}: {e}")
-            return None
-
-    analyzer_json = load_json_file("analyzer_output.json")
-    if analyzer_json:
-        swe_message = json.dumps(analyzer_json, indent=2)
-        print("Sending analyzer JSON to SWE agent...")
-        groupchat.send_message(
-            sender=user,
-            recipient=swe_agent,
-            message=swe_message
-        )
-    else:
-        print("Analyzer JSON not found or invalid.")
-
-    swe_json = load_json_file("swe_agent_output.json")
-    if swe_json:
-        reviser_message = json.dumps(swe_json, indent=2)
-        print("Sending SWE JSON to reviser agent...")
-        groupchat.send_message(
-            sender=user,
-            recipient=reviser,
-            message=reviser_message
-        )
-    else:
-        print("SWE JSON not found or invalid.")
+    user.initiate_chat(
+        manager,
+        message=f"Analyzer, please fetch and analyze the issue from {issue_url}"
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
