@@ -1,0 +1,6 @@
+{
+  "problem_statement": "The tribonacci function does not handle the case where n == 0 correctly, returning None instead of 0.",
+  "filepath": "src/testpkg/tribonacci.py",
+  "first_guess": "The issue lies in the logic for handling n < 3. Specifically, the line 'return trib_history[n-1]' does not account for the case where n == 0.",
+  "paradigm": "Procedural Programming"
+}
