@@ -6,6 +6,34 @@ from dotenv import load_dotenv
 import requests
 import base64
 from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent
+import yaml
+
+# Helper para cargar los YAMLs originales sin modificar su estructura
+def load_agent_from_yaml(filepath, config):
+    try:
+        # Intentar con UTF-8 primero
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+    except UnicodeDecodeError:
+        # Si falla, intentar con UTF-8 con BOM
+        try:
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
+                data = yaml.safe_load(f)
+        except UnicodeDecodeError:
+            # Como último recurso, usar latin-1
+            with open(filepath, 'r', encoding='latin-1') as f:
+                data = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: No se pudo encontrar el archivo {filepath}")
+        print(f"Asegúrate de que el archivo existe en el directorio actual")
+        raise
+
+    # Crear el agente en base a su tipo usando la configuración pasada
+    return AssistantAgent(
+        name=data["name"],
+        system_message=data["system_message"],
+        llm_config={"config_list": [config], "temperature": data.get("temperature", 0.1)}
+    )
 
 def convert_web_url_to_api(url: str) -> str:
     try:
@@ -90,6 +118,7 @@ class AnalyzerDataStore:
         return self.json_data is not None
 
 analyzer_store = AnalyzerDataStore()
+
 class CustomGroupChatManager(GroupChatManager):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -157,6 +186,7 @@ async def main():
     user_input_url = input("Enter GitHub issue url: ").strip()
     issue_url = convert_web_url_to_api(user_input_url)
 
+    # Configuración para los agentes
     config = {
         "api_type": "azure",
         "api_key": os.getenv("AGENTS_API_KEY"),
@@ -165,35 +195,25 @@ async def main():
         "model": os.getenv("AGENTS_MODEL_NAME", "gpt-4o")
     }
 
-    analyzer = AssistantAgent(
-        name="analyzer",
-        llm_config={"config_list": [config], "temperature": 0.1},
-        system_message="""You are a GitHub issue analyzer. Your job is to:
+    # Verificar que los archivos YAML existen
+    yaml_files = ["analyzer.yaml", "swe_agent.yaml", "reviser.yaml"]
+    for yaml_file in yaml_files:
+        if not os.path.exists(yaml_file):
+            print(f"Error: No se encontró el archivo {yaml_file}")
+            print(f"Archivos en el directorio actual: {os.listdir('.')}")
+            return
 
-            1. Fetch GitHub issue details using get_github_issue function
-            2. Get repository structure using get_repository_structure function  
-            3. Get specific file content using get_file_content function
-            4. Analyze the issue and identify the problematic file path
-            5. Create a JSON analysis with ALL required fields filled
+    # Cargar los agentes desde los archivos YAML
+    try:
+        analyzer = load_agent_from_yaml("analyzer.yaml", config)
+        swe_agent = load_agent_from_yaml("swe_agent.yaml", config)
+        reviser = load_agent_from_yaml("reviser.yaml", config)
+        print("✅ Agentes cargados exitosamente desde archivos YAML")
+    except Exception as e:
+        print(f"❌ Error cargando agentes: {e}")
+        return
 
-            IMPORTANT RULES:
-            - ALWAYS say "This might be the filepath of the issue: [filepath]" when you identify a potential problematic file
-            - ALWAYS fetch as much repository code as possible to understand the context
-            - ALWAYS return a complete JSON file to the SWE agent with these exact fields:
-            {
-                "problem_statement": "Clear description of the issue",
-                "filepath": "Path to the problematic file", 
-                "first_guess": "Your hypothesis about what's wrong",
-                "paradigm": "The programming paradigm used, possible return values must be 'Procedural Programming',
-                'Objected-Oriented Programming', 'Procedural and Objected-Oriented Programming', 'Simple Text',
-            }
-            - ALWAYS print the JSON on the terminal
-            - NEVER pass incomplete JSON to SWE-Agent - iterate until all fields are filled
-            - If you need more information, fetch more files or ask for clarification
-            - PLEASE make sure to always provide all the information needed for the SWE-agent to create a patch don't 
-              stop iterating until you have all the information for the SWE-Agent"""
-    )
-
+    # Registrar las funciones solo para el analyzer
     analyzer.register_for_execution(name="get_github_issue")(get_github_issue)
     analyzer.register_for_llm(description="Fetch GitHub issue details using the full issue API URL")(get_github_issue)
     analyzer.register_for_execution(name="get_repository_structure")(get_repository_structure)
@@ -201,44 +221,7 @@ async def main():
     analyzer.register_for_execution(name="get_file_content")(get_file_content)
     analyzer.register_for_llm(description="Get content of a specific file from repository")(get_file_content)
 
-    swe_agent = AssistantAgent(
-        name="swe_agent",
-        llm_config={"config_list": [config], "temperature": 0.1},
-        system_message="""You're a software engineer. When you receive a JSON analysis from the analyzer:
-            1. Read the problem_statement, filepath, first_guess, and paradigm
-            2. Create a code fix/patch for the issue
-            3. Format your response as a proper patch in diff format
-            4. ALWAYS print the patch in this exact format:
-
-            **Patch**:
-            
-            diff
-            --- a/[filename]
-            +++ b/[filename]  
-            @@ -[old_line_start],[old_line_count] +[new_line_start],[new_line_count] @@
-            -[removed lines with - prefix]
-            +[added lines with + prefix]
-
-
-            5. Return a JSON response with:
-            {
-                "patch": "The diff patch content",
-                "filepath": "Path to the file being patched", 
-                "solution_description": "Explanation of what the patch does"
-                "problem_statement": "The problem statement from the analyzer"
-            }
-
-           """
-    )
-
-    reviser = AssistantAgent(
-        name="reviser",
-        llm_config={"config_list": [config], "temperature": 0.7},
-        system_message="You review patches and determine if they solve the problem. Respond with 'LGTM 👍' if approved, otherwise go back to "
-                       "SWE-Agent to create a new proper patch that will fix the error and check again if the patch is correct. Answer with 'LGTM 👍'"
-                       "Don't ask for human input after approving the patch, just end the iteration."
-    )
-
+    # Crear el agente usuario
     user = UserProxyAgent(
         name="user",
         code_execution_config=False,
@@ -246,13 +229,20 @@ async def main():
         is_termination_msg=lambda x: "LGTM" in x.get("content", "") or "👍" in x.get("content", "")
     )
 
+    # Crear el grupo de chat con los agentes cargados desde YAML
     groupchat = GroupChat(
         agents=[user, analyzer, swe_agent, reviser],
         messages=[],
         max_round=20
     )
 
-    manager = CustomGroupChatManager(groupchat=groupchat, llm_config={"config_list": [config], "temperature": 0.5})
+    # Crear el manager con la configuración
+    manager = CustomGroupChatManager(
+        groupchat=groupchat, 
+        llm_config={"config_list": [config], "temperature": 0.5}
+    )
+    
+    # Iniciar el chat
     user.initiate_chat(
         manager,
         message=f"Analyzer, please fetch and analyze the issue from {issue_url}"
