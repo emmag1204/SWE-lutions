@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import json
 from openai import AzureOpenAI
@@ -65,8 +66,6 @@ And here is the code tree data:
 Which file is most likely to be the one that contains the bug? Return only the file path, try to always return a file path, even if you are not sure.
 Response example: `path/to/file.py`
         """
-    print("\n🤖 Guessing the most relevant file...")
-    print(prompt)
     try:
         response = CLIENT.chat.completions.create(
             model="gpt-4o",
@@ -74,10 +73,9 @@ Response example: `path/to/file.py`
             max_tokens=50,
             temperature=0.3
         )
-        print(response.choices[0].message.content)
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"GPT-4 guess failed: {e}")
+        print(f"Exception: GPT-4 guess failed: {e}")
         return None
 
 
@@ -100,17 +98,11 @@ What is likely the root cause of this issue? Provide a brief, direct analysis in
             max_tokens=100,
             temperature=0.3
         )
-        print(response.choices[0].message.content)
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Failed to guess what went wrong: {e}")
+        print(f"Exception: Failed to guess what went wrong: {e}")
         return "Unable to analyze the problem at this time."
 
-def send_to_swe_agent(data):
-    # Mocked call to SWE agent - replace with actual implementation
-    print("\n📨 Sending the following data to SWE agent:")
-    print(json.dumps(data, indent=2))
-    print("\n✅ SWE Agent would now generate the patch and return a file path.")
 
 
 def run_analyzer(issue_url):
@@ -120,7 +112,6 @@ def run_analyzer(issue_url):
     body = issue_data.get("body", "")
     problem_statement = f"{title}\n\n{body}"
 
-    print("\n📁 Fetching full repository file tree...")
     file_paths = fetch_repo_tree(owner, repo)
     # codebase = build_codebase(owner, repo, file_paths)
 
@@ -136,6 +127,57 @@ def run_analyzer(issue_url):
     }
 
     return analyzer_result
+
+
+# SWE-Agent
+def truncate_github_url(issue_url):
+    """Truncate the GitHub issue URL to return the repository URL.
+    Format issue_url: https://github.com/<owner>/<repo>/issues/<issue_number>"""
+    parsed = urlparse(issue_url)
+    parts = parsed.path.strip("/").split("/")
+    #  Return https://github.com/<owner>/<repo>
+    if len(parts) < 3:
+        raise ValueError("Invalid GitHub issue URL")
+    owner, repo = parts[0], parts[1]
+    return f"https://github.com/{owner}/{repo}"
+
+
+def send_to_swe_agent(data):
+    # Mocked call to SWE agent - replace with actual implementation
+    github_repo_url = truncate_github_url(data['github_url'])
+    problem_statement_github_url = data['github_url']
+
+    # Run python SWE-Agent/sweagent/run/run.py run \
+    # --env.repo.github_url={github_repo_url} \
+    # --problem.statement.github_url={problem_statement_github_url} \
+    # --config SWE-Agent/config/custom_env.yaml 
+    result = subprocess.run([
+        "python", "SWE-agent/sweagent/run/run.py", "run",
+        "--config", "SWE-agent/config/custom_env.yaml",
+        f"--env.repo.github_url={github_repo_url}",
+        f"--problem_statement.github_url={problem_statement_github_url}"
+    ], capture_output=True, text=True)
+    print("\n -------------------------------------------------------\n")
+    print(result.stdout)
+    print("\n------------------------------------------------------\n\n")
+
+    # Need to find the result of PATCH_FILE_PATH from result.stdout
+    # Ex. PATCH_FILE_PATH='/home/omarmacma/Tec/AplicacionesAvanzadas/SWE-lutions/trajectories/omarmacma/custom_env__azure/gpt-4o__t-0.00__p-1.00__c-15.00___SWE-agent__test-repo-i1/SWE-agent__test-repo-i1/SWE-agent__te-repo-i1.patch'
+    if "PATCH_FILE_PATH=" in result.stdout:
+        patch_file_path = result.stdout.split("PATCH_FILE_PATH='")[1].split("'")[0]
+        # Replace " \n " with "st"
+        patch_file_path = patch_file_path.replace(" \n ", "st")
+        patch_file_path = patch_file_path.strip()
+    else:
+        print("********************************************ERROR: PATCH_FILE_PATH not found in output.*********************************************")
+        return
+    print(f"📂 Patch file generated at: {patch_file_path}")
+    with open(patch_file_path, 'r') as file:
+        patch_content = file.read()
+    data['patch'] = patch_content
+    print("\n📜 Patch content:")
+    print(patch_content[:500] + "\n...\n" if len(patch_content) > 500 else patch_content)
+    return patch_content
 
 
 # Revisor
@@ -287,21 +329,14 @@ Provide your analysis as a JSON object with the required fields."""}
             }
 
 
-def run_revisor(swe_agent_output_json: str) -> dict:
+def run_revisor(swe_agent_output_dict: str) -> dict:
     reviewer = Revisor()
 
-    problem = "Fix a function that should return the sum of two numbers"
-    patch = """
-def calculate_sum(x, y):  # Variable names changed from a,b to x,y (should be ignored)
-    result = x + y  # Fixed: was returning x - y
+    result = reviewer.review_patch(
+        problem_statement=swe_agent_output_dict.get("problem_statement", ""),
+        patch=swe_agent_output_dict.get("patch", "")
+    )
     return result
-"""
-    result = reviewer.review_patch(problem, patch)
-    print(json.dumps(result, indent=2))
-    return result
-
-
-
 
 
 
@@ -311,11 +346,25 @@ def main():
         sys.exit(1)
 
     issue_url = sys.argv[1]
+    print(f"Processing GitHub issue URL: {issue_url}")
     analyzer_result = run_analyzer(issue_url)
+    print("\n------------------------------------------------------\nAnalyzer Result:")
+    print(json.dumps(analyzer_result, indent=2))
+    print("\n------------------------------------------------------\n")
 
-    send_to_swe_agent(analyzer_result)
+    print("Initiating SWE-Agent to generate a patch...")
 
-    run_revisor("")
+    patch = send_to_swe_agent(analyzer_result)
+    if patch and analyzer_result["problem_statement"]:
+        swe_output_json = {
+            "problem_statement": analyzer_result["problem_statement"],
+            "patch": patch,
+        }
+
+        print("\n------------------------------------------------------\nRevision Outcome:")
+        print(run_revisor(swe_output_json))
+    else:
+        print("No patch generated or problem statement missing. Exiting.")
 
 
 if __name__ == "__main__":

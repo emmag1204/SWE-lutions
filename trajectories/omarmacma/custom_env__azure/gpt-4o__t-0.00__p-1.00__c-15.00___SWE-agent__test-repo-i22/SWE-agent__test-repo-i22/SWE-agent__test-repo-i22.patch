@@ -1,0 +1,11 @@
+diff --git a/src/testpkg/tribonacci.py b/src/testpkg/tribonacci.py
+index 3236432..04e3127 100644
+--- a/src/testpkg/tribonacci.py
++++ b/src/testpkg/tribonacci.py
+@@ -1,4 +1,6 @@
+ def tribonacci(n: int) -> int:
++    if n == 0:
++        return 0
+     """Calculates the n-th tribonacci number.
+ 
+     Here, the tribonacci sequence is defined as follows:
