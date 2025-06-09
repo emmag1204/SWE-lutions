@@ -1,0 +1,90 @@
+S -> OOP | PP 
+
+OOP -> class COMP | self COMP
+
+COMP -> OOP | PP| e
+
+PP -> def COMP
+
+
+First:
+S = {def, class, self}
+OOP = {class, self}
+PP = {def}
+
+COMP = {def, class, self, e}
+
+Follows:
+S = {$}
+OOP = {$}
+PP = {$}
+COMP = {$}
+
+First+
+S -> OOP
+{class, self}
+S -> PP 
+{def}
+
+OOP -> class COMP 
+{class}
+OOP -> self COMP
+{self}
+
+PP -> def COMP
+{def}
+
+COMP -> OOP 
+{class, self}
+COMP -> PP 
+{def}
+COMP -> e
+{$}
+
+
+
+
+
+
+Replacing with tokenid
+
+S -> OOP | PP 
+
+OOP -> <2> COMP | <3> COMP
+
+PP -> <1> COMP
+COMP -> PP | OOP | e
+
+First:
+S = {<1>, <2>, <3>}
+OOP = {<2>, <3>}
+PP = {<1>}
+
+COMP = {<1>, <2>, <3>, e}
+
+Follows:
+S = {$}
+OOP = {$}
+PP = {$}
+COMP = {$}
+
+First+
+S -> OOP
+{<2>, <3>}
+S -> PP 
+{<1>}
+
+OOP -> <2> COMP 
+{<2>}
+OOP -> <3> COMP
+{<3>}
+
+PP -> <1> COMP
+{<1>}
+
+COMP -> OOP 
+{<2>, <3>}
+COMP -> PP 
+{<1>}
+COMP -> e
+{$}
